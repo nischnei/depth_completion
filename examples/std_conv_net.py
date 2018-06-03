@@ -38,7 +38,6 @@ class StdConvExperiment(DepthCompletionExperiment):
 
     def network(self, tf_input):
         x = Conv2D(filters=16, kernel_size=(11, 11), padding='same')(tf_input)
-        print(x)
         x = Activation('relu')(x)
         x = Conv2D(filters=16, kernel_size=(7, 7), padding='same')(x)
         x = Activation('relu')(x)

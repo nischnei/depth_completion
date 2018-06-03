@@ -6,7 +6,6 @@ from keras import backend as K
 import tensorflow as tf
 from experiment import Experiment
 
-
 def load_img_to_tensor(dict_type_to_imagepath):
     dict_res = {}
     for str_type, str_filepath in dict_type_to_imagepath.items():
@@ -15,7 +14,7 @@ def load_img_to_tensor(dict_type_to_imagepath):
             str_filepath = tf.regex_replace(str_filepath, tf.constant('\$KITTIPATH'), tf.constant(kittipath))
         except Exception:
             print("WARNING: KITTIPATH not defined - this may result in errors!")
-        str_filepath = tf.Print(str_filepath,[str_filepath])
+        # str_filepath = tf.Print(str_filepath,[str_filepath])
         tf_filepath = tf.read_file(str_filepath)
         tf_tensor = tf.image.decode_png(tf_filepath, dtype=tf.uint16)
         tf_tensor = tf.cast(tf_tensor, dtype=tf.int32)

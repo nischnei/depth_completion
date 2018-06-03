@@ -52,7 +52,6 @@ class SparseConv(Layer):
         self.input_spec = InputSpec(ndim=4)
 
     def build(self, input_shape):
-        print self.data_format
         if self.data_format == 'channels_first':
             channel_axis = 1
         else:
@@ -63,7 +62,6 @@ class SparseConv(Layer):
         input_dim = input_shape[channel_axis]
         kernel_shape = self.kernel_size + (input_dim, self.filters)
         kernel_shape_ones = self.kernel_size + (1, 1)
-        print kernel_shape
 
         self.kernel = self.add_weight(shape=kernel_shape,
                                       initializer=self.kernel_initializer,
@@ -94,7 +92,6 @@ class SparseConv(Layer):
     def call(self, inputs):
         # multiply the inputs with the mask first, so no invalid entries exist
         features = inputs * self.mask
-        print(features)
 
         # do convolution on features with trainable weights
         features = K.conv2d(
@@ -136,8 +133,6 @@ class SparseConv(Layer):
         return [self.feature, self.newMask]
 
     def compute_output_shape(self, input_shape):
-        print "SHAPPEE"
-        print(tuple(K.int_shape(self.newMask)))
         return [tuple(K.int_shape(self.feature)),
                 tuple(K.int_shape(self.newMask))]
 
