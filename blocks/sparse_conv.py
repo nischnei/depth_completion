@@ -1,6 +1,6 @@
 from keras import backend as K
 from keras.engine.topology import Layer
-from keras.engine.base_layers import InputSpec
+from keras.layers import InputSpec
 
 from keras.utils import conv_utils
 
@@ -10,6 +10,7 @@ from keras import regularizers
 from keras import constraints
 
 import tensorflow as tf
+
 
 class SparseConv(Layer):
 
@@ -34,7 +35,8 @@ class SparseConv(Layer):
         super(SparseConv, self).__init__(**kwargs)
         self.mask = mask
         self.filters = filters
-        self.kernel_size = conv_utils.normalize_tuple(kernel_size, 2, 'kernel_size')
+        self.kernel_size = conv_utils.normalize_tuple(
+            kernel_size, 2, 'kernel_size')
         self.strides = conv_utils.normalize_tuple(strides, 2, 'strides')
         self.padding = conv_utils.normalize_padding(padding)
         self.data_format = conv_utils.normalize_data_format(data_format)
@@ -47,9 +49,10 @@ class SparseConv(Layer):
         self.activity_regularizer = regularizers.get(activity_regularizer)
         self.kernel_constraint = constraints.get(kernel_constraint)
         self.bias_constraint = constraints.get(bias_constraint)
-        self.input_spec = InputSpec(ndim=self.rank + 2)
+        self.input_spec = InputSpec(ndim=4)
 
     def build(self, input_shape):
+        print self.data_format
         if self.data_format == 'channels_first':
             channel_axis = 1
         else:
@@ -59,6 +62,8 @@ class SparseConv(Layer):
                              'should be defined. Found `None`.')
         input_dim = input_shape[channel_axis]
         kernel_shape = self.kernel_size + (input_dim, self.filters)
+        kernel_shape_ones = self.kernel_size + (1, 1)
+        print kernel_shape
 
         self.kernel = self.add_weight(shape=kernel_shape,
                                       initializer=self.kernel_initializer,
@@ -66,10 +71,9 @@ class SparseConv(Layer):
                                       regularizer=self.kernel_regularizer,
                                       constraint=self.kernel_constraint)
 
-
-        self.kernel_ones = self.add_weight(shape=kernel_shape,
+        self.kernel_ones = self.add_weight(shape=kernel_shape_ones,
                                            initializer=initializers.Ones(),
-                                           name='kernel',
+                                           name='kernel_ones',
                                            regularizer=None,
                                            constraint=None,
                                            trainable=False)
@@ -83,36 +87,36 @@ class SparseConv(Layer):
         else:
             self.bias = None
         # Set input spec.
-        self.input_spec = InputSpec(ndim=self.rank + 2,
+        self.input_spec = InputSpec(ndim=4,
                                     axes={channel_axis: input_dim})
         self.built = True
 
     def call(self, inputs):
         # multiply the inputs with the mask first, so no invalid entries exist
-        features = K.multiply(inputs, self.mask)
+        features = inputs * self.mask
+        print(features)
 
         # do convolution on features with trainable weights
         features = K.conv2d(
-                features,
-                self.kernel,
-                strides=self.strides,
-                padding=self.padding,
-                data_format=self.data_format,
-                use_bias=False)
+            features,
+            self.kernel,
+            strides=self.strides,
+            padding=self.padding,
+            data_format=self.data_format)
 
         # calculate the normalization
         norm = K.conv2d(
-                self.mask,
-                self.kernel_ones,
-                strides=self.strides,
-                padding=self.padding,
-                data_format=self.data_format,
-                use_bias=False)
+            self.mask,
+            self.kernel_ones,
+            strides=self.strides,
+            padding=self.padding,
+            data_format=self.data_format)
 
-        norm = tf.where(tf.equal(norm,0),tf.zeros_like(norm),tf.reciprocal(norm))
-        _,_,_,bias_size = norm.get_shape()
+        norm = tf.where(tf.equal(norm, 0), tf.zeros_like(
+            norm), tf.reciprocal(norm))
+        _, _, _, bias_size = norm.get_shape()
 
-        feature = K.multiply(features,norm)
+        feature = features * norm
 
         if self.use_bias:
             feature = K.bias_add(
@@ -120,35 +124,22 @@ class SparseConv(Layer):
                 self.bias,
                 data_format=self.data_format)
 
-        newMask = K.MaxPooling2D(self.mask,
-            strides=self.strides,
-            pool_size=self.kernel_size)
+        self.newMask = K.pool2d(self.mask,
+                                strides=self.strides,
+                                pool_size=self.kernel_size,
+                                padding='same',
+                                data_format=self.data_format,
+                                pool_mode='max')
 
         if self.activation is not None:
-            return self.activation(feature)
-        return feature, newMask
+            self.feature = self.activation(feature)
+        return [self.feature, self.newMask]
 
     def compute_output_shape(self, input_shape):
-        if self.data_format == 'channels_last':
-            space = input_shape[1:-1]
-            new_space = []
-            for i in range(len(space)):
-                new_dim = conv_utils.conv_output_length(
-                    space[i],
-                    self.kernel_size[i],
-                    padding=self.padding,
-                    stride=self.strides[i])
-                new_space.append(new_dim)
-            return (input_shape[0],) + tuple(new_space) + (self.filters,)
-        if self.data_format == 'channels_first':
-            space = input_shape[2:]
-            new_space = []
-            for i in range(len(space)):
-                new_dim = conv_utils.conv_output_length(
-                    space[i],
-                    self.kernel_size[i],
-                    padding=self.padding,
-                    stride=self.strides[i])
-                new_space.append(new_dim)
-        return [(input_shape[0], self.filters) + tuple(new_space)]*2
-        
+        print "SHAPPEE"
+        print(tuple(K.int_shape(self.newMask)))
+        return [tuple(K.int_shape(self.feature)),
+                tuple(K.int_shape(self.newMask))]
+
+    def compute_mask(self, input, input_mask=None):
+        return [None, None]
