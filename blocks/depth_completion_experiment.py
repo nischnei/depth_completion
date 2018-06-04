@@ -6,12 +6,17 @@ from keras import backend as K
 import tensorflow as tf
 from experiment import Experiment
 
+import numpy as np
+from PIL import Image
+
+
 def load_img_to_tensor(dict_type_to_imagepath):
     dict_res = {}
     for str_type, str_filepath in dict_type_to_imagepath.items():
         try:
             kittipath = os.environ['KITTIPATH']
-            str_filepath = tf.regex_replace(str_filepath, tf.constant('\$KITTIPATH'), tf.constant(kittipath))
+            str_filepath = tf.regex_replace(str_filepath, tf.constant(
+                '\$KITTIPATH'), tf.constant(kittipath))
         except Exception:
             print("WARNING: KITTIPATH not defined - this may result in errors!")
         # str_filepath = tf.Print(str_filepath,[str_filepath])
@@ -30,7 +35,7 @@ class DepthCompletionExperiment(Experiment):
 
         self.parameters.image_size = (1216, 352)
         self.parameters.loss_function = 'mean_squared_error'
-        self.parameters.metrics = ['accuracy']
+        self.parameters.metrics = ['mse']
 
     def tf_data_api(self, dataset, mode="train"):
 
@@ -78,7 +83,39 @@ class DepthCompletionExperiment(Experiment):
     def load_data(self, dataset):
         return self.tf_data_api(dataset)
 
+    def replaceKITTIPath(self, _string):
+        try:
+            kittipath = os.environ['KITTIPATH']
+            _string = _string.replace('$KITTIPATH', kittipath)
+        except Exception:
+            print("WARNING: KITTIPATH not defined - this may result in errors!")
+
+        return _string
+
+    def load_eval_data(self, dataset):
+        with open(dataset["input"]) as fp:
+            input_data = fp.readlines()
+            input_data = sorted(input_data)
+            input_data = [line.strip() for line in input_data]
+            print(len(input_data))
+            input_data_np = np.empty((len(input_data),
+                                      self.parameters.image_size[0], self.parameters.image_size[1], 1))
+            for input_filename in input_data:
+                input_data_np[0, :] = np.array(np.reshape(Image.open(self.replaceKITTIPath(
+                    input_filename)), [self.parameters.image_size[0], self.parameters.image_size[1], 1]))
+        with open(dataset["label"]) as fp:
+            label_data = fp.readlines()
+            label_data = sorted(label_data)
+            label_data = [line.strip() for line in label_data]
+            label_data_np = np.empty((len(label_data),
+                                      self.parameters.image_size[0], self.parameters.image_size[1], 1))
+            for label_filename in input_data:
+                label_data_np[0, :] = np.array(np.reshape(Image.open(self.replaceKITTIPath(
+                    label_filename)), [self.parameters.image_size[0], self.parameters.image_size[1], 1]))
+        return input_data_np, label_data_np
+
     def train(self):
+
         tf_inputs, tf_labels = self.load_data(self.parameters.dataset_train)
         inputs = Input(tensor=tf_inputs)
         outputs = self.network(inputs)
@@ -101,8 +138,8 @@ class DepthCompletionExperiment(Experiment):
         # Clear session and prepare for testing
         K.clear_session()
         K.set_learning_phase(0)
-
-        inputs, labels = self.load_data(self.parameters.dataset_val)
+        np_inputs, np_labels = self.load_eval_data(self.parameters.dataset_val)
+        inputs = Input(shape=np.shape(np_inputs[0]))
         outputs = self.network(inputs)
         model = Model(inputs=inputs, outputs=outputs)
 
@@ -112,8 +149,8 @@ class DepthCompletionExperiment(Experiment):
 
         model.load_weights('trained_model.h5')
 
-        loss, acc = model.evaluate(inputs,
-                                   labels,
+        loss, acc = model.evaluate(np_inputs,
+                                   np_labels,
                                    verbose=1,
                                    batch_size=1)
 
