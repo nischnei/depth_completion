@@ -1,140 +1,65 @@
-from keras import backend as K
-from keras.engine.topology import Layer
-from keras.layers import InputSpec
-
-from keras.utils import conv_utils
-
-from keras import activations
-from keras import initializers
-from keras import regularizers
-from keras import constraints
-
 import tensorflow as tf
 
+# Code implemented by https://github.com/PeterTor/sparse_convolution
 
-class SparseConv(Layer):
+"""Arguments
+   tensor: Tensor input.
+   binary_mask: Tensor, a mask with the same size as tensor, channel size = 1
+   filters: Integer, the dimensionality of the output space (i.e. the number
+      of filters in the convolution).
+   kernel_size: An integer or tuple/list of 2 integers, specifying the
+      height and width of the 2D convolution window.
+   strides: An integer or tuple/list of 2 integers,
+      specifying the strides of the convolution along the height and width.
+   l2_scale: float, A scalar multiplier Tensor. 0.0 disables the regularizer.
+   
+ Returns:
+   Output tensor, binary mask.
+ """
 
-    def __init__(self,
-                 mask,
-                 filters,
-                 kernel_size,
-                 strides=1,
-                 padding='valid',
-                 data_format=None,
-                 dilation_rate=1,
-                 activation=None,
-                 use_bias=True,
-                 kernel_initializer='glorot_uniform',
-                 bias_initializer='zeros',
-                 kernel_regularizer=None,
-                 bias_regularizer=None,
-                 activity_regularizer=None,
-                 kernel_constraint=None,
-                 bias_constraint=None,
-                 **kwargs):
-        super(SparseConv, self).__init__(**kwargs)
-        self.mask = mask
-        self.filters = filters
-        self.kernel_size = conv_utils.normalize_tuple(
-            kernel_size, 2, 'kernel_size')
-        self.strides = conv_utils.normalize_tuple(strides, 2, 'strides')
-        self.padding = conv_utils.normalize_padding(padding)
-        self.data_format = conv_utils.normalize_data_format(data_format)
-        self.activation = activations.get(activation)
-        self.use_bias = use_bias
-        self.kernel_initializer = initializers.get(kernel_initializer)
-        self.bias_initializer = initializers.get(bias_initializer)
-        self.kernel_regularizer = regularizers.get(kernel_regularizer)
-        self.bias_regularizer = regularizers.get(bias_regularizer)
-        self.activity_regularizer = regularizers.get(activity_regularizer)
-        self.kernel_constraint = constraints.get(kernel_constraint)
-        self.bias_constraint = constraints.get(bias_constraint)
-        self.input_spec = InputSpec(ndim=4)
+def sparse_conv(tensor,mask = None,
+                filters=32,
+                kernel_size=3,
+                strides=1,
+                l2_scale=0.0, 
+                padding='same', 
+                kernel_initializer=tf.contrib.layers.xavier_initializer()):
 
-    def build(self, input_shape):
-        if self.data_format == 'channels_first':
-            channel_axis = 1
-        else:
-            channel_axis = -1
-        if input_shape[channel_axis] is None:
-            raise ValueError('The channel dimension of the inputs '
-                             'should be defined. Found `None`.')
-        input_dim = input_shape[channel_axis]
-        kernel_shape = self.kernel_size + (input_dim, self.filters)
-        kernel_shape_ones = self.kernel_size + (1, 1)
+    if mask == None: #first layer has no binary mask
+        b,h,w,c = tensor.get_shape()
+        channels=tf.split(tensor,c,axis=3)
+        #assume that if one channel has no information, all channels have no information
+        mask = tf.where(tf.equal(channels[0], 0), 
+                        tf.zeros_like(channels[0]), 
+                        tf.ones_like(channels[0])) #mask should only have the size of (B,H,W,1)
 
-        self.kernel = self.add_weight(shape=kernel_shape,
-                                      initializer=self.kernel_initializer,
-                                      name='kernel',
-                                      regularizer=self.kernel_regularizer,
-                                      constraint=self.kernel_constraint)
+    features = tf.multiply(tensor,mask)
+    features = tf.layers.conv2d(features, 
+                                filters=filters, 
+                                kernel_size=kernel_size, 
+                                kernel_initializer=kernel_initializer,
+                                strides=(strides, strides), 
+                                trainable=True, 
+                                use_bias=False, 
+                                padding=padding,
+                                kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=l2_scale))
 
-        self.kernel_ones = self.add_weight(shape=kernel_shape_ones,
-                                           initializer=initializers.Ones(),
-                                           name='kernel_ones',
-                                           regularizer=None,
-                                           constraint=None,
-                                           trainable=False)
+    norm = tf.layers.conv2d(mask, 
+                            filters=filters,
+                            kernel_size=kernel_size,
+                            strides=(strides, strides),
+                            kernel_initializer=tf.ones_initializer(),
+                            trainable=False,
+                            use_bias=False,
+                            padding=padding)
 
-        if self.use_bias:
-            self.bias = self.add_weight(shape=(self.filters,),
-                                        initializer=self.bias_initializer,
-                                        name='bias',
-                                        regularizer=self.bias_regularizer,
-                                        constraint=self.bias_constraint)
-        else:
-            self.bias = None
-        # Set input spec.
-        self.input_spec = InputSpec(ndim=4,
-                                    axes={channel_axis: input_dim})
-        self.built = True
+    norm = tf.where(tf.equal(norm,0),tf.zeros_like(norm),tf.reciprocal(norm))
+    _,_,_,bias_size = norm.get_shape()
 
-    def call(self, inputs):
-        # multiply the inputs with the mask first, so no invalid entries exist
-        features = inputs * self.mask
+    # add a bias term
+    b = tf.Variable(tf.constant(0.0, shape=[bias_size]),trainable=True)
 
-        # do convolution on features with trainable weights
-        features = K.conv2d(
-            features,
-            self.kernel,
-            strides=self.strides,
-            padding=self.padding,
-            data_format=self.data_format)
+    feature = tf.multiply(features,norm)+b
+    mask = tf.layers.max_pooling2d(mask,strides=strides,pool_size=kernel_size,padding=padding)
 
-        # calculate the normalization
-        norm = K.conv2d(
-            self.mask,
-            self.kernel_ones,
-            strides=self.strides,
-            padding=self.padding,
-            data_format=self.data_format)
-
-        norm = tf.where(tf.equal(norm, 0), tf.zeros_like(
-            norm), tf.reciprocal(norm))
-        _, _, _, bias_size = norm.get_shape()
-
-        feature = features * norm
-
-        if self.use_bias:
-            feature = K.bias_add(
-                feature,
-                self.bias,
-                data_format=self.data_format)
-
-        self.newMask = K.pool2d(self.mask,
-                                strides=self.strides,
-                                pool_size=self.kernel_size,
-                                padding='same',
-                                data_format=self.data_format,
-                                pool_mode='max')
-
-        if self.activation is not None:
-            self.feature = self.activation(feature)
-        return [self.feature, self.newMask]
-
-    def compute_output_shape(self, input_shape):
-        return [tuple(K.int_shape(self.feature)),
-                tuple(K.int_shape(self.newMask))]
-
-    def compute_mask(self, input, input_mask=None):
-        return [None, None]
+    return feature, mask

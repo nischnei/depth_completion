@@ -1,4 +1,3 @@
-from keras import optimizers
 import argparse
 
 class Parameters():
@@ -20,13 +19,17 @@ class Parameters():
 
         self.learning_rate = 0.01
 
-        self.optimizer = optimizers.Adagrad(lr=self.learning_rate, epsilon=None, decay=0.0)
+        self.optimizer = None
+
+        self.invalid_value = 0
 
         self.epochs=10
         self.steps_per_epoch=1
-        self.max_epochs=1
+
+        self.log_dir='/tmp/experiment_logs'
 
         self.shuffle = True
+        self.prefetch_buffer_size = 4
 
 class Experiment(object):
 
@@ -56,7 +59,7 @@ class Experiment(object):
     def run(self):
         self.parse_args()
 
-    def network(self, input):
+    def network(self, input, **kwargs):
         raise NotImplementedError
 
     def train(self):

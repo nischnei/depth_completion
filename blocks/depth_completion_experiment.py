@@ -1,8 +1,5 @@
 import os
 
-from keras.layers import Input
-from keras.models import Model
-from keras import backend as K
 import tensorflow as tf
 from experiment import Experiment
 
@@ -19,7 +16,6 @@ def load_img_to_tensor(dict_type_to_imagepath):
                 '\$KITTIPATH'), tf.constant(kittipath))
         except Exception:
             print("WARNING: KITTIPATH not defined - this may result in errors!")
-        # str_filepath = tf.Print(str_filepath,[str_filepath])
         tf_filepath = tf.read_file(str_filepath)
         tf_tensor = tf.image.decode_png(tf_filepath, dtype=tf.uint16)
         tf_tensor = tf.cast(tf_tensor, dtype=tf.int32)
@@ -32,13 +28,9 @@ class DepthCompletionExperiment(Experiment):
 
     def __init__(self):
         super(DepthCompletionExperiment, self).__init__()
-
         self.parameters.image_size = (1216, 352)
-        self.parameters.loss_function = 'mean_squared_error'
-        self.parameters.metrics = ['mse']
 
-    def tf_data_api(self, dataset, mode="train"):
-
+    def input_fn(self, dataset, mode="train"):
         self.dict_dataset_lists = {}
         ds_input = os.path.expandvars(dataset["input"])
         ds_label = os.path.expandvars(dataset["label"])
@@ -53,9 +45,9 @@ class DepthCompletionExperiment(Experiment):
                 if self.parameters.shuffle:
                     tf_dataset = tf_dataset.shuffle(
                         buffer_size=self.parameters.steps_per_epoch * self.parameters.batchsize)
-                tf_dataset = tf_dataset.map(
-                    load_img_to_tensor, num_parallel_calls=1)
+                tf_dataset = tf_dataset.map(load_img_to_tensor, num_parallel_calls=1)
                 tf_dataset = tf_dataset.batch(self.parameters.batchsize)
+                tf_dataset = tf_dataset.prefetch(buffer_size=self.parameters.prefetch_buffer_size)
             else:
                 tf_dataset = tf_dataset.batch(1)
 
@@ -80,8 +72,11 @@ class DepthCompletionExperiment(Experiment):
 
         return tf_input, tf_label
 
-    def load_data(self, dataset):
-        return self.tf_data_api(dataset)
+    def input_fn_train(self):
+        return self.input_fn( self.parameters.dataset_train )
+
+    def input_fn_val(self):
+        return self.input_fn( self.parameters.dataset_val, mode="val" )
 
     def replaceKITTIPath(self, _string):
         try:
@@ -93,7 +88,7 @@ class DepthCompletionExperiment(Experiment):
         return _string
 
     def load_eval_data(self, dataset):
-        with open(dataset["input"]) as fp:
+        with open(dataset["features"]) as fp:
             input_data = fp.readlines()
             input_data = sorted(input_data)
             input_data = [line.strip() for line in input_data]
@@ -103,7 +98,7 @@ class DepthCompletionExperiment(Experiment):
             for input_filename in input_data:
                 input_data_np[0, :] = np.array(np.reshape(Image.open(self.replaceKITTIPath(
                     input_filename)), [self.parameters.image_size[0], self.parameters.image_size[1], 1]))
-        with open(dataset["label"]) as fp:
+        with open(dataset["labels"]) as fp:
             label_data = fp.readlines()
             label_data = sorted(label_data)
             label_data = [line.strip() for line in label_data]
@@ -114,47 +109,78 @@ class DepthCompletionExperiment(Experiment):
                     label_filename)), [self.parameters.image_size[0], self.parameters.image_size[1], 1]))
         return input_data_np, label_data_np
 
-    def train(self):
+    # Define the model function (following TF Estimator Template)
+    def model_fn(self, features, labels, mode):
+        # Build the neural network
+        # Because Dropout have different behavior at training and prediction time, we
+        # need to create 2 distinct computation graphs that still share the same weights.
+        logits_train = self.network(features, reuse=False, is_training=True)
+        logits_test = self.network(features, reuse=True, is_training=False)
 
-        tf_inputs, tf_labels = self.load_data(self.parameters.dataset_train)
-        inputs = Input(tensor=tf_inputs)
-        outputs = self.network(inputs)
-        model = Model(inputs=inputs, outputs=outputs)
+        if mode == tf.estimator.ModeKeys.TRAIN:
+            tf.summary.image("Input/Train/", features)
+            tf.summary.image("Output/Train/", logits_train)
+            tf.summary.image("Label/Train/", labels)
 
-        model.compile(optimizer=self.parameters.optimizer,
-                      loss=self.parameters.loss_function,
-                      metrics=self.parameters.metrics,
-                      target_tensors=[tf_labels])
-        model.summary()
+        if mode == tf.estimator.ModeKeys.EVAL:
+            tf.summary.image("Input/Val/", features)
+            tf.summary.image("Output/Val/", logits_test)
+            tf.summary.image("Label/Val/", labels)
 
-        model.fit(epochs=self.parameters.max_epochs,
-                  steps_per_epoch=self.parameters.steps_per_epoch)
 
-        # ##
-        model.save_weights('trained_model.h5')
+        # Predictions
+        prediction = logits_test
+
+        # If prediction mode, early return
+        if mode == tf.estimator.ModeKeys.PREDICT:
+            return tf.estimator.EstimatorSpec(mode, predictions=prediction)
+
+        #label weight mask
+        label_mask = tf.where(tf.equal(labels, self.parameters.invalid_value), 
+                              tf.zeros_like(labels), 
+                              tf.ones_like(labels))
+
+        # Define loss and optimizer
+        loss_op = tf.reduce_mean(self.parameters.loss_function( predictions=logits_train, 
+                                                                labels=labels,
+                                                                weights=label_mask ))
+
+        # normalize the loss
+        loss_op = loss_op / (self.parameters.image_size[0]*self.parameters.image_size[1])
+
+        train_op = self.parameters.optimizer.minimize(loss_op,
+                                      global_step=tf.train.get_global_step())
+
+        # Evaluate the accuracy of the model
+        mae_op = tf.metrics.mean_absolute_error(labels=labels, predictions=prediction)
+        mse_op = tf.metrics.mean_squared_error(labels=labels, predictions=prediction)
+
+        # TF Estimators requires to return a EstimatorSpec, that specify
+        # the different ops for training, evaluating, ...
+        estim_specs = tf.estimator.EstimatorSpec(
+            mode=mode,
+            predictions=prediction,
+            loss=loss_op,
+            train_op=train_op,
+            eval_metric_ops={'mae': mae_op,
+                             'mse': mse_op})
+
+        return estim_specs
+
+    def train(self):        
+        # Build the Estimator
+        model = tf.estimator.Estimator(self.model_fn, model_dir=self.parameters.log_dir)
+
+        train_spec = tf.estimator.TrainSpec(input_fn=self.input_fn_train, max_steps=self.parameters.num_steps)
+        eval_spec = tf.estimator.EvalSpec(input_fn=self.input_fn_val)
+
+
+        # Train and evaluate the Model
+        tf.estimator.train_and_evaluate(model, train_spec, eval_spec)
 
     def val(self):
-
         # Clear session and prepare for testing
-        K.clear_session()
-        K.set_learning_phase(0)
-        np_inputs, np_labels = self.load_eval_data(self.parameters.dataset_val)
-        inputs = Input(shape=np.shape(np_inputs[0]))
-        outputs = self.network(inputs)
-        model = Model(inputs=inputs, outputs=outputs)
-
-        model.compile(optimizer=self.parameters.optimizer,
-                      loss=self.parameters.loss_function,
-                      metrics=self.parameters.metrics)
-
-        model.load_weights('trained_model.h5')
-
-        loss, acc = model.evaluate(np_inputs,
-                                   np_labels,
-                                   verbose=1,
-                                   batch_size=1)
-
-        print('\nTest accuracy: {0}'.format(acc))
+        pass
 
     def test(self):
         input_data, label_data = self.load_data(self.parameters.dataset_test)
