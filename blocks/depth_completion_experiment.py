@@ -49,7 +49,9 @@ class DepthCompletionExperiment(Experiment):
                 tf_dataset = tf_dataset.batch(self.parameters.batchsize)
                 tf_dataset = tf_dataset.prefetch(buffer_size=self.parameters.prefetch_buffer_size)
             else:
+                tf_dataset = tf_dataset.map(load_img_to_tensor, num_parallel_calls=1)
                 tf_dataset = tf_dataset.batch(1)
+                tf_dataset = tf_dataset.prefetch(buffer_size=self.parameters.prefetch_buffer_size)
 
             iterator = tf_dataset.make_one_shot_iterator()
 
@@ -87,28 +89,6 @@ class DepthCompletionExperiment(Experiment):
 
         return _string
 
-    def load_eval_data(self, dataset):
-        with open(dataset["features"]) as fp:
-            input_data = fp.readlines()
-            input_data = sorted(input_data)
-            input_data = [line.strip() for line in input_data]
-            print(len(input_data))
-            input_data_np = np.empty((len(input_data),
-                                      self.parameters.image_size[0], self.parameters.image_size[1], 1))
-            for input_filename in input_data:
-                input_data_np[0, :] = np.array(np.reshape(Image.open(self.replaceKITTIPath(
-                    input_filename)), [self.parameters.image_size[0], self.parameters.image_size[1], 1]))
-        with open(dataset["labels"]) as fp:
-            label_data = fp.readlines()
-            label_data = sorted(label_data)
-            label_data = [line.strip() for line in label_data]
-            label_data_np = np.empty((len(label_data),
-                                      self.parameters.image_size[0], self.parameters.image_size[1], 1))
-            for label_filename in input_data:
-                label_data_np[0, :] = np.array(np.reshape(Image.open(self.replaceKITTIPath(
-                    label_filename)), [self.parameters.image_size[0], self.parameters.image_size[1], 1]))
-        return input_data_np, label_data_np
-
     # Define the model function (following TF Estimator Template)
     def model_fn(self, features, labels, mode):
         # Build the neural network
@@ -140,32 +120,29 @@ class DepthCompletionExperiment(Experiment):
                               tf.zeros_like(labels), 
                               tf.ones_like(labels))
 
+        norm = 1. / (self.parameters.image_size[0]*self.parameters.image_size[1])
+
+        normed_label_mask = label_mask * norm
+
         # Define loss and optimizer
-        loss_op = tf.reduce_mean(self.parameters.loss_function( predictions=logits_train, 
-                                                                labels=labels,
-                                                                weights=label_mask ))
+        loss = tf.reduce_mean(self.parameters.loss_function( predictions=logits_train, 
+                                                             labels=labels,
+                                                             weights=normed_label_mask ))
+        # specify what should be done during the TRAIN call
+        if mode == tf.estimator.ModeKeys.TRAIN:
+            train_op = self.parameters.optimizer.minimize(loss=loss,
+                                                          global_step=tf.train.get_global_step())
 
-        # normalize the loss
-        loss_op = loss_op / (self.parameters.image_size[0]*self.parameters.image_size[1])
+            return tf.estimator.EstimatorSpec( mode=mode, loss=loss, train_op=train_op)
 
-        train_op = self.parameters.optimizer.minimize(loss_op,
-                                      global_step=tf.train.get_global_step())
+        # specify what should be done during the EVAL call
+        # Evaluate the accuracy of the model (MAE)
+        mae_op = tf.metrics.mean_absolute_error(labels=labels, predictions=prediction, weights=normed_label_mask)
+        # Evaluate the accuracy of the model (MSE)
+        mse_op = tf.metrics.mean_squared_error(labels=labels, predictions=prediction, weights=normed_label_mask)
 
-        # Evaluate the accuracy of the model
-        mae_op = tf.metrics.mean_absolute_error(labels=labels, predictions=prediction)
-        mse_op = tf.metrics.mean_squared_error(labels=labels, predictions=prediction)
-
-        # TF Estimators requires to return a EstimatorSpec, that specify
-        # the different ops for training, evaluating, ...
-        estim_specs = tf.estimator.EstimatorSpec(
-            mode=mode,
-            predictions=prediction,
-            loss=loss_op,
-            train_op=train_op,
-            eval_metric_ops={'mae': mae_op,
-                             'mse': mse_op})
-
-        return estim_specs
+        return tf.estimator.EstimatorSpec( 
+            mode=mode, predictions=prediction, loss=loss, eval_metric_ops={'mae': mae_op,'mse': mse_op})
 
     def train(self):        
         # Build the Estimator
