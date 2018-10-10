@@ -29,11 +29,13 @@ class SparseConvExperiment(DepthCompletionExperiment):
 
         self.parameters.log_dir = '../logs/sparse_conv_net/'
 
-        self.parameters.learning_rate = 0.1
-        self.parameters.optimizer = tf.train.MomentumOptimizer(
-            learning_rate=self.parameters.learning_rate, 
-            momentum=0.9,
-            use_nesterov=True)
+        self.parameters.learning_rate = 0.9
+        #self.parameters.optimizer = tf.train.MomentumOptimizer(
+        #    learning_rate=self.parameters.learning_rate, 
+        #    momentum=0.9,
+        #    use_nesterov=True)
+        self.parameters.optimizer = tf.train.AdamOptimizer(
+             learning_rate=self.parameters.learning_rate)
         self.parameters.loss_function = tf.losses.mean_squared_error
 
     def network(self, tf_input, **kwargs):

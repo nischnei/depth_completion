@@ -21,7 +21,7 @@ def sparse_conv(tensor,mask = None,
                 filters=32,
                 kernel_size=3,
                 strides=1,
-                l2_scale=0.0, 
+                l2_scale=2.0, 
                 padding='same', 
                 kernel_initializer=tf.contrib.layers.xavier_initializer()):
 

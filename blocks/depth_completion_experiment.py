@@ -3,8 +3,7 @@ import os
 import tensorflow as tf
 from experiment import Experiment
 
-import numpy as np
-from PIL import Image
+from visualization import depth_colored
 
 
 def load_img_to_tensor(dict_type_to_imagepath):
@@ -18,7 +17,8 @@ def load_img_to_tensor(dict_type_to_imagepath):
             print("WARNING: KITTIPATH not defined - this may result in errors!")
         tf_filepath = tf.read_file(str_filepath)
         tf_tensor = tf.image.decode_png(tf_filepath, dtype=tf.uint16)
-        tf_tensor = tf.cast(tf_tensor, dtype=tf.int32)
+        tf_tensor = tf.cast(tf_tensor, dtype=tf.float32)
+        tf_tensor = tf.divide(tf_tensor, 256.0)
 
         dict_res[str_type] = tf_tensor
     return dict_res
@@ -98,15 +98,14 @@ class DepthCompletionExperiment(Experiment):
         logits_test = self.network(features, reuse=True, is_training=False)
 
         if mode == tf.estimator.ModeKeys.TRAIN:
-            tf.summary.image("Input/Train/", features)
-            tf.summary.image("Output/Train/", logits_train)
-            tf.summary.image("Label/Train/", labels)
+            tf.summary.image("Input/Train/", depth_colored(features))
+            tf.summary.image("Output/Train/", depth_colored(logits_train))
+            tf.summary.image("Label/Train/", depth_colored(labels))
 
         if mode == tf.estimator.ModeKeys.EVAL:
-            tf.summary.image("Input/Val/", features)
-            tf.summary.image("Output/Val/", logits_test)
-            tf.summary.image("Label/Val/", labels)
-
+            tf.summary.image("Input/Val/", depth_colored(features))
+            tf.summary.image("Output/Val/", depth_colored(logits_test))
+            tf.summary.image("Label/Val/", depth_colored(labels))
 
         # Predictions
         prediction = logits_test
