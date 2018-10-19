@@ -55,3 +55,26 @@ Set it in your .bashrc file in your home directory or wherever you want.
 The prebuilt dataset files have entries as follows:
 
 $KITTIPATH/train/2011_10_03_drive_0042_sync/proj_depth/velodyne_raw/image_03/0000001161.png
+
+
+## Training the networks
+
+There are currently 2 example networks, that we also used for comparison in our paper. Currently, there is still a bit finetuning needed as we coded the paper in caffe and I'm currently struggeling to get the same results with tensorflow, but keep yourself updated on this page.
+
+Both models can be trained by e.g.
+
+```
+./sparse_conv_net.py train
+```
+
+Up to this date, I have not implemented a test and eval only option, but they will be added in the future.
+
+The logs are created in the repo folder, if you don't change the log_dir parameter in the experiment.
+
+### Visualizing the results
+
+You can visualize the results by using tensorboard. I added a rudimentary visualization.
+
+```
+tensorboard --logdir logs
+```
