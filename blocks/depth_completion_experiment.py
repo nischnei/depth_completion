@@ -45,13 +45,17 @@ class DepthCompletionExperiment(Experiment):
                 if self.parameters.shuffle:
                     tf_dataset = tf_dataset.shuffle(
                         buffer_size=self.parameters.steps_per_epoch * self.parameters.batchsize)
-                tf_dataset = tf_dataset.map(load_img_to_tensor, num_parallel_calls=1)
+                tf_dataset = tf_dataset.map(
+                    load_img_to_tensor, num_parallel_calls=1)
                 tf_dataset = tf_dataset.batch(self.parameters.batchsize)
-                tf_dataset = tf_dataset.prefetch(buffer_size=self.parameters.prefetch_buffer_size)
+                tf_dataset = tf_dataset.prefetch(
+                    buffer_size=self.parameters.prefetch_buffer_size)
             else:
-                tf_dataset = tf_dataset.map(load_img_to_tensor, num_parallel_calls=1)
+                tf_dataset = tf_dataset.map(
+                    load_img_to_tensor, num_parallel_calls=1)
                 tf_dataset = tf_dataset.batch(1)
-                tf_dataset = tf_dataset.prefetch(buffer_size=self.parameters.prefetch_buffer_size)
+                tf_dataset = tf_dataset.prefetch(
+                    buffer_size=self.parameters.prefetch_buffer_size)
 
             iterator = tf_dataset.make_one_shot_iterator()
 
@@ -75,10 +79,10 @@ class DepthCompletionExperiment(Experiment):
         return tf_input, tf_label
 
     def input_fn_train(self):
-        return self.input_fn( self.parameters.dataset_train )
+        return self.input_fn(self.parameters.dataset_train)
 
     def input_fn_val(self):
-        return self.input_fn( self.parameters.dataset_val, mode="val" )
+        return self.input_fn(self.parameters.dataset_val, mode="val")
 
     def replaceKITTIPath(self, _string):
         try:
@@ -91,65 +95,73 @@ class DepthCompletionExperiment(Experiment):
 
     # Define the model function (following TF Estimator Template)
     def model_fn(self, features, labels, mode):
-        # Build the neural network
-        # Because Dropout have different behavior at training and prediction time, we
-        # need to create 2 distinct computation graphs that still share the same weights.
-        logits_train = self.network(features, reuse=False, is_training=True)
-        logits_test = self.network(features, reuse=True, is_training=False)
+        with tf.name_scope("Model"):
+            # Build the neural network
+            # Because Dropout have different behavior at training and prediction time, we
+            # need to create 2 distinct computation graphs that still share the same weights.
+            logits_train = self.network(
+                features, reuse=False, is_training=True)
+            logits_test = self.network(features, reuse=True, is_training=False)
 
-        if mode == tf.estimator.ModeKeys.TRAIN:
-            tf.summary.image("Input/Train/", depth_colored(features))
-            tf.summary.image("Output/Train/", depth_colored(logits_train))
-            tf.summary.image("Label/Train/", depth_colored(labels))
+            if mode == tf.estimator.ModeKeys.TRAIN:
+                tf.summary.image(
+                    "Input/Train/", depth_colored(features, tf.reduce_max(labels)))
+                tf.summary.image(
+                    "Output/Train/", depth_colored(logits_train, tf.reduce_max(labels)))
+                tf.summary.image(
+                    "Label/Train/", depth_colored(labels, tf.reduce_max(labels)))
 
-        if mode == tf.estimator.ModeKeys.EVAL:
-            tf.summary.image("Input/Val/", depth_colored(features))
-            tf.summary.image("Output/Val/", depth_colored(logits_test))
-            tf.summary.image("Label/Val/", depth_colored(labels))
+            # Predictions
+            prediction = logits_test
 
-        # Predictions
-        prediction = logits_test
+            # If prediction mode, early return
+            if mode == tf.estimator.ModeKeys.PREDICT:
+                return tf.estimator.EstimatorSpec(mode, predictions=prediction)
 
-        # If prediction mode, early return
-        if mode == tf.estimator.ModeKeys.PREDICT:
-            return tf.estimator.EstimatorSpec(mode, predictions=prediction)
+            # label weight mask
+            label_mask = tf.where(tf.equal(labels, self.parameters.invalid_value),
+                                  tf.zeros_like(labels),
+                                  tf.ones_like(labels))
 
-        #label weight mask
-        label_mask = tf.where(tf.equal(labels, self.parameters.invalid_value), 
-                              tf.zeros_like(labels), 
-                              tf.ones_like(labels))
+            norm = 1. / (self.parameters.image_size[0]*self.parameters.image_size[1])
 
-        norm = 1. / (self.parameters.image_size[0]*self.parameters.image_size[1])
+            normed_label_mask = label_mask * norm
 
-        normed_label_mask = label_mask * norm
+            if mode == tf.estimator.ModeKeys.TRAIN:
+                tf.summary.image(
+                    "Mask/Train/", normed_label_mask)
 
-        # Define loss and optimizer
-        loss = tf.reduce_mean(self.parameters.loss_function( predictions=logits_train, 
-                                                             labels=labels,
-                                                             weights=normed_label_mask ))
-        # specify what should be done during the TRAIN call
-        if mode == tf.estimator.ModeKeys.TRAIN:
-            train_op = self.parameters.optimizer.minimize(loss=loss,
-                                                          global_step=tf.train.get_global_step())
+            with tf.name_scope("Loss") as loss_scope:
+                # Define loss and optimizer
+                loss = tf.reduce_mean(self.parameters.loss_function(predictions=logits_train,
+                                                                    labels=labels,
+                                                                    weights=normed_label_mask))
+            # specify what should be done during the TRAIN call
+            if mode == tf.estimator.ModeKeys.TRAIN:
+                train_op = self.parameters.optimizer.minimize(loss=loss,
+                                                              global_step=tf.train.get_global_step())
 
-            return tf.estimator.EstimatorSpec( mode=mode, loss=loss, train_op=train_op)
+                return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
 
-        # specify what should be done during the EVAL call
-        # Evaluate the accuracy of the model (MAE)
-        mae_op = tf.metrics.mean_absolute_error(labels=labels, predictions=prediction, weights=normed_label_mask)
-        # Evaluate the accuracy of the model (MSE)
-        mse_op = tf.metrics.mean_squared_error(labels=labels, predictions=prediction, weights=normed_label_mask)
+            # specify what should be done during the EVAL call
+            # Evaluate the accuracy of the model (MAE)
+            mae_op = tf.metrics.mean_absolute_error(
+                labels=labels, predictions=prediction, weights=normed_label_mask)
+            # Evaluate the accuracy of the model (MSE)
+            mse_op = tf.metrics.mean_squared_error(
+                labels=labels, predictions=prediction, weights=normed_label_mask)
 
-        return tf.estimator.EstimatorSpec( 
-            mode=mode, predictions=prediction, loss=loss, eval_metric_ops={'mae': mae_op,'mse': mse_op})
+            return tf.estimator.EstimatorSpec(
+                mode=mode, predictions=prediction, loss=loss, eval_metric_ops={'mae': mae_op, 'mse': mse_op})
 
-    def train(self):        
+    def train(self):
         # Build the Estimator
-        model = tf.estimator.Estimator(self.model_fn, model_dir=self.parameters.log_dir)
+        model = tf.estimator.Estimator(
+            self.model_fn, model_dir=self.parameters.log_dir)
 
-        train_spec = tf.estimator.TrainSpec(input_fn=self.input_fn_train, max_steps=self.parameters.num_steps)
+        train_spec = tf.estimator.TrainSpec(
+            input_fn=self.input_fn_train, max_steps=self.parameters.num_steps)
         eval_spec = tf.estimator.EvalSpec(input_fn=self.input_fn_val)
-
 
         # Train and evaluate the Model
         tf.estimator.train_and_evaluate(model, train_spec, eval_spec)

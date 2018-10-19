@@ -29,7 +29,7 @@ class SparseConvExperiment(DepthCompletionExperiment):
 
         self.parameters.log_dir = '../logs/sparse_conv_net/'
 
-        self.parameters.learning_rate = 0.9
+        self.parameters.learning_rate = 0.001
         #self.parameters.optimizer = tf.train.MomentumOptimizer(
         #    learning_rate=self.parameters.learning_rate, 
         #    momentum=0.9,
@@ -51,17 +51,17 @@ class SparseConvExperiment(DepthCompletionExperiment):
                             tf.zeros_like(channels[0]), 
                             tf.ones_like(channels[0])) #mask should only have the size of (B,H,W,1)
 
-            x, mask = sparse_conv(tf_input, mask=mask, filters=16, kernel_size=(11, 11), padding='same')
+            x, mask = sparse_conv(tf_input, mask=mask, filters=16, kernel_size=(11, 11), padding='same', name='sparse_conv1')
             x = tf.nn.relu(x)
-            x, mask = sparse_conv(x, mask=mask, filters=16, kernel_size=(7, 7), padding='same')
+            x, mask = sparse_conv(x, mask=mask, filters=16, kernel_size=(7, 7), padding='same', name='sparse_conv2')
             x = tf.nn.relu(x)
-            x, mask = sparse_conv(x, mask=mask, filters=16, kernel_size=(5, 5), padding='same')
+            x, mask = sparse_conv(x, mask=mask, filters=16, kernel_size=(5, 5), padding='same', name='sparse_conv3')
             x = tf.nn.relu(x)
-            x, mask = sparse_conv(x, mask=mask, filters=16, kernel_size=(3, 3), padding='same')
+            x, mask = sparse_conv(x, mask=mask, filters=16, kernel_size=(3, 3), padding='same', name='sparse_conv4')
             x = tf.nn.relu(x)
-            x, mask = sparse_conv(x, mask=mask, filters=16, kernel_size=(3, 3), padding='same')
+            x, mask = sparse_conv(x, mask=mask, filters=16, kernel_size=(3, 3), padding='same', name='sparse_conv5')
             x = tf.nn.relu(x)
-            x, mask = sparse_conv(x, mask=mask, filters=1, kernel_size=(1, 1), padding='same')
+            x, mask = sparse_conv(x, mask=mask, filters=1, kernel_size=(1, 1), padding='same', name='sparse_conv6')
 
             return x*mask
 
