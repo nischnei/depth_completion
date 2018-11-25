@@ -6,29 +6,30 @@ from experiment import Experiment
 from visualization import depth_colored
 
 
-def load_img_to_tensor(dict_type_to_imagepath):
-    dict_res = {}
-    for str_type, str_filepath in dict_type_to_imagepath.items():
-        try:
-            kittipath = os.environ['KITTIPATH']
-            str_filepath = tf.regex_replace(str_filepath, tf.constant(
-                '\$KITTIPATH'), tf.constant(kittipath))
-        except Exception:
-            print("WARNING: KITTIPATH not defined - this may result in errors!")
-        tf_filepath = tf.read_file(str_filepath)
-        tf_tensor = tf.image.decode_png(tf_filepath, dtype=tf.uint16)
-        tf_tensor = tf.cast(tf_tensor, dtype=tf.float32)
-        tf_tensor = tf.divide(tf_tensor, 256.0)
-
-        dict_res[str_type] = tf_tensor
-    return dict_res
-
-
 class DepthCompletionExperiment(Experiment):
 
     def __init__(self):
         super(DepthCompletionExperiment, self).__init__()
-        self.parameters.image_size = (1216, 352)
+        self.parameters.image_size = (352, 1216)
+
+    def load_img_to_tensor(self, dict_type_to_imagepath):
+        dict_res = {}
+        for str_type, str_filepath in dict_type_to_imagepath.items():
+            try:
+                kittipath = os.environ['KITTIPATH']
+                str_filepath = tf.regex_replace(str_filepath, tf.constant(
+                    '\$KITTIPATH'), tf.constant(kittipath))
+            except Exception:
+                print("WARNING: KITTIPATH not defined - this may result in errors!")
+            tf_filepath = tf.read_file(str_filepath)
+            tf_tensor = tf.image.decode_png(tf_filepath, dtype=tf.uint16)
+            tf_tensor = tf.image.resize_image_with_crop_or_pad(tf_tensor, self.parameters.image_size[0], self.parameters.image_size[1]) 
+            tf_tensor = tf.cast(tf_tensor, dtype=tf.float32)
+            tf_tensor = tf.divide(tf_tensor, 256.0)
+
+            dict_res[str_type] = tf_tensor
+        return dict_res
+
 
     def input_fn(self, dataset, mode="train"):
         self.dict_dataset_lists = {}
@@ -44,15 +45,15 @@ class DepthCompletionExperiment(Experiment):
                 tf_dataset = tf_dataset.repeat(self.parameters.max_epochs)
                 if self.parameters.shuffle:
                     tf_dataset = tf_dataset.shuffle(
-                        buffer_size=self.parameters.steps_per_epoch * self.parameters.batchsize)
+                        buffer_size=self.parameters.steps_per_epoch / self.parameters.batchsize)
                 tf_dataset = tf_dataset.map(
-                    load_img_to_tensor, num_parallel_calls=1)
+                    self.load_img_to_tensor, num_parallel_calls=1)
                 tf_dataset = tf_dataset.batch(self.parameters.batchsize)
                 tf_dataset = tf_dataset.prefetch(
                     buffer_size=self.parameters.prefetch_buffer_size)
             else:
                 tf_dataset = tf_dataset.map(
-                    load_img_to_tensor, num_parallel_calls=1)
+                    self.load_img_to_tensor, num_parallel_calls=1)
                 tf_dataset = tf_dataset.batch(1)
                 tf_dataset = tf_dataset.prefetch(
                     buffer_size=self.parameters.prefetch_buffer_size)
@@ -63,18 +64,19 @@ class DepthCompletionExperiment(Experiment):
 
             tf_input = dict_tf_input["input"]
             tf_label = dict_tf_input["label"]
-
-            tf_input = tf.map_fn(lambda img: tf.image.resize_image_with_crop_or_pad(
-                img, self.parameters.image_size[0], self.parameters.image_size[1]), tf_input)
-            tf_label = tf.map_fn(lambda img: tf.image.resize_image_with_crop_or_pad(
-                img, self.parameters.image_size[0], self.parameters.image_size[1]), tf_label)
-
-            tf_input.set_shape([self.parameters.batchsize,
-                                self.parameters.image_size[0], self.parameters.image_size[1], 1])
-            tf_input = tf.cast(tf_input, tf.float32)
-            tf_label.set_shape([self.parameters.batchsize,
-                                self.parameters.image_size[0], self.parameters.image_size[1], 1])
-            tf_label = tf.cast(tf_label, tf.float32)
+            
+            if mode == "train":
+                tf_input.set_shape([self.parameters.batchsize,
+                                    self.parameters.image_size[0], self.parameters.image_size[1], 1])
+                tf_input = tf.cast(tf_input, tf.float32)
+                tf_label.set_shape([self.parameters.batchsize,
+                                    self.parameters.image_size[0], self.parameters.image_size[1], 1])
+                tf_label = tf.cast(tf_label, tf.float32)
+            else:
+                tf_input.set_shape([1, self.parameters.image_size[0], self.parameters.image_size[1], 1])
+                tf_input = tf.cast(tf_input, tf.float32)
+                tf_label.set_shape([1, self.parameters.image_size[0], self.parameters.image_size[1], 1])
+                tf_label = tf.cast(tf_label, tf.float32)
 
         return tf_input, tf_label
 
